@@ -16,6 +16,7 @@ from collections import Counter
 
 
 file = ''
+test_data_file = ''
 
 with open(file, 'r') as f:
     twits = json.load(f)
@@ -304,7 +305,7 @@ model.eval()
 model.to("cpu")
 predict(text, model, vocab)
 
-with open(os.path.join('..', '..', 'data', 'project_6_stocktwits', 'test_twits.json'), 'r') as f:
+with open(test_data_file , 'r') as f:
     test_data = json.load(f)
 
 
