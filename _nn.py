@@ -38,10 +38,10 @@ def preprocess(message):
     # Replace URLs with a space in the message
     text = re.sub(r'((http|ftp|https):\/\/)?[\w\-_]+(\.[\w\-_]+)+([\w\-\.,@?^=%&amp;:/~\+#]*[\w\-\@?^=%&amp;/~\+#])?', ' ', text)
     
-    # Replace ticker symbols with a space. The ticker symbols are any stock symbol that starts with $.
+    # Replace ticker symbols with a space
     text = re.sub(r'[$]\w+', ' ', text)
     
-    # Replace StockTwits usernames with a space. The usernames are any word that starts with @.
+    # Replace StockTwits usernames with a space
     text = re.sub(r'[@]\w+', ' ', text)
 
     # Replace everything not a letter with a space
@@ -50,7 +50,7 @@ def preprocess(message):
     # Tokenize by splitting the string on whitespace into a list of words
     tokens = text.split()
 
-    # Lemmatize words using the WordNetLemmatizer. You can ignore any word that is not longer than one character.
+    # Lemmatize words using the WordNetLemmatizer.
     wnl = nltk.stem.WordNetLemmatizer()
     tokens = [wnl.lemmatize(i) for i in tokens if len(i) > 1]
     
@@ -66,14 +66,14 @@ freqs = {k: v / len(tokenized) for k, v in dict(bow).items()}
 low_cutoff = 1e-5
 # Integer that is the cut off for most common words. Drop words that are the `high_cutoff` most common words.
 high_cutoff = 18
-# The k most common words in the corpus. Use `high_cutoff` as the k.
+# The k most common words in the corpus. 
 K_most_common = bow.most_common(high_cutoff)
 
 filtered_words = [word for word in freqs if (freqs[word] > low_cutoff and word not in K_most_common)]
 print(K_most_common)
 len(filtered_words) 
 
-# A dictionary for the `filtered_words`. The key is the word and value is an id that represents the word. 
+# A dictionary for the `filtered_words`. 
 vocab = {word: i for i, word in enumerate(filtered_words, 1)}
 # Reverse of the `vocab` dictionary. The key is word id and value is the word. 
 id2vocab = {word: i for i, word in vocab.items()}
@@ -89,7 +89,7 @@ keep_prob = (N_examples - n_neutral)/4/n_neutral
 for idx, sentiment in enumerate(sentiments):
     message = filtered[idx]
     if len(message) == 0:
-        # skip this message because it has length zero
+        # skip this message because it is empty
         continue
     elif sentiment != 2 or random.random() < keep_prob:
         balanced['messages'].append(message)
@@ -247,8 +247,6 @@ for epoch in range(epochs):
         nn.utils.clip_grad_norm_(model.parameters(), clip)
         optimizer.step()
         
-        # TODO Implement: Train Model
-        
         if steps % print_every == 0:
             model.eval()
             val_losses = []
@@ -270,7 +268,6 @@ for epoch in range(epochs):
                     top_p, top_class = ps.topk(1, dim=1)
                     equals = top_class == labels.view(*top_class.shape)
                     accuracy.append(torch.mean(equals.type(torch.FloatTensor)).item())
-                    # TODO Implement: Print metrics
             
             print("Epoch: {}/{}...".format(epoch+1, epochs),
                   "Step: {}...".format(steps),
