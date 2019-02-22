@@ -8,29 +8,16 @@ import torch
 from tqdm import tqdm
 import numpy as np
 
-from torch import nn, optim
+from torch import optim
 import torch.nn.functional as F
+import torch.nn as nn
 
 from collections import Counter
 
 
 
-file = ''
-test_data_file = ''
-
-with open(file, 'r') as f:
-    twits = json.load(f)
-
-print(twits['data'][:10])
-print('Number of tweets: {}'.format(len(twits['data'])))
-
-
-messages = [twit['message_body'] for twit in twits['data']]
-# Since the sentiment scores are discrete, we'll scale the sentiments to 0 to 4 for use in our network
-sentiments = [twit['sentiment'] + 2 for twit in twits['data']]
-
-nltk.download('wordnet')
-import re
+file = 'twits.json'
+test_file = 'test_twits.json'
 
 def preprocess(message):
     # Lowercase the twit message
@@ -39,10 +26,10 @@ def preprocess(message):
     # Replace URLs with a space in the message
     text = re.sub(r'((http|ftp|https):\/\/)?[\w\-_]+(\.[\w\-_]+)+([\w\-\.,@?^=%&amp;:/~\+#]*[\w\-\@?^=%&amp;/~\+#])?', ' ', text)
     
-    # Replace ticker symbols with a space
+    # Replace ticker symbols with a space. The ticker symbols are any stock symbol that starts with $.
     text = re.sub(r'[$]\w+', ' ', text)
     
-    # Replace StockTwits usernames with a space
+    # Replace StockTwits usernames with a space. The usernames are any word that starts with @.
     text = re.sub(r'[@]\w+', ' ', text)
 
     # Replace everything not a letter with a space
@@ -51,60 +38,28 @@ def preprocess(message):
     # Tokenize by splitting the string on whitespace into a list of words
     tokens = text.split()
 
-    # Lemmatize words using the WordNetLemmatizer.
+    # Lemmatize words using the WordNetLemmatizer. You can ignore any word that is not longer than one character.
     wnl = nltk.stem.WordNetLemmatizer()
     tokens = [wnl.lemmatize(i) for i in tokens if len(i) > 1]
     
     return tokens
 
-tokenized = [preprocess(i['message_body']) for i in twits['data']]
-
-bow = Counter([item for l in tokenized for item in l])
-
-#Frequency of words appearing in message
-freqs = {k: v / len(tokenized) for k, v in dict(bow).items()}
-# Float that is the frequency cutoff. Drop words with a frequency that is lower or equal to this number.
-low_cutoff = 1e-5
-# Integer that is the cut off for most common words. Drop words that are the `high_cutoff` most common words.
-high_cutoff = 18
-# The k most common words in the corpus. 
-K_most_common = bow.most_common(high_cutoff)
-
-filtered_words = [word for word in freqs if (freqs[word] > low_cutoff and word not in K_most_common)]
-print(K_most_common)
-len(filtered_words) 
-
-# A dictionary for the `filtered_words`. 
-vocab = {word: i for i, word in enumerate(filtered_words, 1)}
-# Reverse of the `vocab` dictionary. The key is word id and value is the word. 
-id2vocab = {word: i for i, word in vocab.items()}
-# tokenized with the words not in `filtered_words` removed.
-filtered = [[word for word in message if word in vocab] for message in tqdm(tokenized)]
-
-balanced = {'messages': [], 'sentiments':[]}
-
-n_neutral = sum(1 for each in sentiments if each == 2)
-N_examples = len(sentiments)
-keep_prob = (N_examples - n_neutral)/4/n_neutral
-
-for idx, sentiment in enumerate(sentiments):
-    message = filtered[idx]
-    if len(message) == 0:
-        # skip this message because it is empty
-        continue
-    elif sentiment != 2 or random.random() < keep_prob:
-        balanced['messages'].append(message)
-        balanced['sentiments'].append(sentiment) 
-
-n_neutral = sum(1 for each in balanced['sentiments'] if each == 2)
-N_examples = len(balanced['sentiments'])
-n_neutral/N_examples
-
-token_ids = [[vocab[word] for word in message] for message in balanced['messages']]
-sentiments = balanced['sentiments']
+def twit_stream():
+    for twit in test_data['data']:
+        yield twit
 
 
-import torch.nn as nn
+def score_twits(stream, model, vocab, universe):
+    for twit in stream:
+
+        # Get the message text
+        text = twit['message_body']
+        symbols = re.findall('\$[A-Z]{2,4}', text)
+        score = predict(text, model, vocab)
+
+        for symbol in symbols:
+            if symbol in universe:
+                yield {'symbol': symbol, 'score': score, 'timestamp': twit['timestamp']}
 
 class TextClassifier(nn.Module):
     def __init__(self, vocab_size, embed_size, lstm_size, output_size, lstm_layers=1, dropout=0.1):
@@ -147,15 +102,6 @@ class TextClassifier(nn.Module):
         
         return logps, hidden_state
 
-model = TextClassifier(len(vocab), 10, 6, 5, dropout=0.1, lstm_layers=2)
-model.embedding.weight.data.uniform_(-1, 1)
-model = model.cuda()
-input = torch.randint(0, 1000, (5, 4), dtype=torch.int64)
-hidden = model.init_hidden(4)
-
-logps, _ = model.forward(input, hidden)
-print(logps)
-
 def dataloader(messages, labels, sequence_length=30, batch_size=32, shuffle=False):
     if shuffle:
         indices = list(range(len(messages)))
@@ -179,6 +125,94 @@ def dataloader(messages, labels, sequence_length=30, batch_size=32, shuffle=Fals
         label_tensor = torch.tensor(labels[ii: ii+len(batch_messages)])
         
         yield batch, label_tensor
+
+def predict(text, model, vocab):
+    tokens = preprocess(text)
+    
+    # Filter non-vocab words
+    tokens = [word for word in tokens if word in vocab]
+    # Convert words to ids
+    tokens = [vocab[word] for word in tokens]
+    token_tensor=torch.tensor(tokens)   
+    # Adding a batch dimension
+    text_input = token_tensor.view(-1,1)
+    # Get the NN output
+    
+    hidden = model.init_hidden(text_input.size(1))
+    logps, _ = model(text_input, hidden)
+    # Take the exponent of the NN output to get a range of 0 to 1 for each label.
+    pred = logps.exp()
+    
+    return pred
+
+with open(file, 'r') as f:
+    twits = json.load(f)
+
+print(twits['data'][:10])
+print('Number of tweets: {}'.format(len(twits['data'])))
+
+
+messages = [twit['message_body'] for twit in twits['data']]
+# Since the sentiment scores are discrete, we'll scale the sentiments to 0 to 4 for use in our network
+sentiments = [twit['sentiment'] + 2 for twit in twits['data']]
+
+#nltk.download('wordnet')
+print('Tokening')
+tokenized = [preprocess(i['message_body']) for i in twits['data']]
+
+bow = Counter([item for l in tokenized for item in l])
+print('Bag of words created')
+#Frequency of words appearing in message
+freqs = {k: v / len(tokenized) for k, v in dict(bow).items()}
+# Float that is the frequency cutoff. Drop words with a frequency that is lower or equal to this number.
+low_cutoff = 1e-5
+# Integer that is the cut off for most common words. Drop words that are the `high_cutoff` most common words.
+high_cutoff = 18
+# The k most common words in the corpus. Use `high_cutoff` as the k.
+K_most_common = bow.most_common(high_cutoff)
+
+filtered_words = [word for word in freqs if (freqs[word] > low_cutoff and word not in K_most_common)]
+print(K_most_common)
+len(filtered_words) 
+
+# A dictionary for the `filtered_words`. The key is the word and value is an id that represents the word. 
+vocab = {word: i for i, word in enumerate(filtered_words, 1)}
+# Reverse of the `vocab` dictionary. The key is word id and value is the word. 
+id2vocab = {word: i for i, word in vocab.items()}
+# tokenized with the words not in `filtered_words` removed.
+filtered = [[word for word in message if word in vocab] for message in tqdm(tokenized)]
+
+balanced = {'messages': [], 'sentiments':[]}
+
+n_neutral = sum(1 for each in sentiments if each == 2)
+N_examples = len(sentiments)
+keep_prob = (N_examples - n_neutral)/4/n_neutral
+
+for idx, sentiment in enumerate(sentiments):
+    message = filtered[idx]
+    if len(message) == 0:
+        # skip this message because it has length zero
+        continue
+    elif sentiment != 2 or random.random() < keep_prob:
+        balanced['messages'].append(message)
+        balanced['sentiments'].append(sentiment) 
+
+n_neutral = sum(1 for each in balanced['sentiments'] if each == 2)
+N_examples = len(balanced['sentiments'])
+n_neutral/N_examples
+
+token_ids = [[vocab[word] for word in message] for message in balanced['messages']]
+sentiments = balanced['sentiments']
+
+
+model = TextClassifier(len(vocab), 10, 6, 5, dropout=0.1, lstm_layers=2)
+model.embedding.weight.data.uniform_(-1, 1)
+model = model.cuda()
+input = torch.randint(0, 1000, (5, 4), dtype=torch.int64)
+hidden = model.init_hidden(4)
+
+logps, _ = model.forward(input, hidden)
+print(logps)
 
 split_index = int(len(token_ids)*0.8)
 
@@ -211,7 +245,7 @@ model.embedding.weight.data.uniform_(-1, 1)
 model.to(device)
 
 epochs = 4
-batch_size = 64
+batch_size = 1024
 learning_rate = 0.001
 clip = 5
 seq_len = 40
@@ -248,6 +282,8 @@ for epoch in range(epochs):
         nn.utils.clip_grad_norm_(model.parameters(), clip)
         optimizer.step()
         
+        # TODO Implement: Train Model
+        
         if steps % print_every == 0:
             model.eval()
             val_losses = []
@@ -269,6 +305,7 @@ for epoch in range(epochs):
                     top_p, top_class = ps.topk(1, dim=1)
                     equals = top_class == labels.view(*top_class.shape)
                     accuracy.append(torch.mean(equals.type(torch.FloatTensor)).item())
+                    # TODO Implement: Print metrics
             
             print("Epoch: {}/{}...".format(epoch+1, epochs),
                   "Step: {}...".format(steps),
@@ -278,57 +315,16 @@ for epoch in range(epochs):
             model.train()
 
 
-
-# Prediction 
-
-def predict(text, model, vocab):
-    tokens = preprocess(text)
-    
-    # Filter non-vocab words
-    tokens = [word for word in tokens if word in vocab]
-    # Convert words to ids
-    tokens = [vocab[word] for word in tokens]
-    token_tensor=torch.tensor(tokens)   
-    # Adding a batch dimension
-    text_input = token_tensor.view(-1,1)
-    # Get the NN output
-    
-    hidden = model.init_hidden(text_input.size(1))
-    logps, _ = model(token_tensor, hidden)
-    # Take the exponent of the NN output to get a range of 0 to 1 for each label.
-    pred = logps.exp()
-    
-    return pred
-
 text = "Google is working on self driving cars, I'm bullish on $goog"
 model.eval()
-model.to("cpu")
+model.to(device)
+
 predict(text, model, vocab)
 
-with open(test_data_file , 'r') as f:
+with open(test_file, 'r') as f:
     test_data = json.load(f)
 
-
-def twit_stream():
-    for twit in test_data['data']:
-        yield twit
-
 next(twit_stream())
-
-
-
-def score_twits(stream, model, vocab, universe):
-    for twit in stream:
-
-        # Get the message text
-        text = twit['message_body']
-        symbols = re.findall('\$[A-Z]{2,4}', text)
-        score = predict(text, model, vocab)
-
-        for symbol in symbols:
-            if symbol in universe:
-                yield {'symbol': symbol, 'score': score, 'timestamp': twit['timestamp']}
-
 
 universe = {'$BBRY', '$AAPL', '$AMZN', '$BABA', '$YHOO', '$LQMT', '$FB', '$GOOG', '$BBBY', '$JNUG', '$SBUX', '$MU'}
 score_stream = score_twits(twit_stream(), model, vocab, universe)
