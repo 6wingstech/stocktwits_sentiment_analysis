@@ -292,8 +292,8 @@ def predict(text, model, vocab):
     text_input = token_tensor.view(-1,1)
     # Get the NN output
     
-    hidden = model.init_hidden(batch_size=1)
-    logps, _ = model(text_input, hidden)
+    hidden = model.init_hidden(text_input.size(1))
+    logps, _ = model(token_tensor, hidden)
     # Take the exponent of the NN output to get a range of 0 to 1 for each label.
     pred = logps.exp()
     
